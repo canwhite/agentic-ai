@@ -102,37 +102,57 @@ async def async_worker_loop(
     loop = asyncio.get_running_loop()
 
     while True:
-        try:
-            # 首先检查是否有已完成的任务（在任何操作之前）
-            for t in active_tasks[:]:
-                if t.done():
-                    active_tasks.remove(t)
-                    try:
-                        result = t.result()
-                        completed_count += 1
-                        # 将结果放入结果队列
-                        result_queue.put({
-                            "worker_id": worker_id,
-                            **result,
-                        })
-                        logger.info(
-                            f"    [完成] {worker_id} 任务 {result['task_id']} "
-                            f"已返回结果"
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"    [错误] {worker_id} 任务结果获取失败: {e}"
-                        )
-
-            # 如果没有活跃任务，尝试从队列获取任务
-            if len(active_tasks) == 0:
+        # 首先检查是否有已完成的任务（在任何操作之前）
+        for t in active_tasks[:]:
+            if t.done():
+                active_tasks.remove(t)
                 try:
-                    # 尝试非阻塞获取任务
-                    task = task_queue.get_nowait()
-                except:
-                    # 队列为空，没有任务在执行，可以退出了
-                    logger.info(f"Worker {worker_id} 所有任务已完成，退出")
-                    break
+                    result = t.result()
+                    completed_count += 1
+                    # 将结果放入结果队列
+                    result_queue.put({
+                        "worker_id": worker_id,
+                        **result,
+                    })
+                    logger.info(
+                        f"    [完成] {worker_id} 任务 {result['task_id']} "
+                        f"已返回结果"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"    [错误] {worker_id} 任务结果获取失败: {e}"
+                    )
+
+        # 如果没有活跃任务，尝试从队列获取任务
+        if len(active_tasks) == 0:
+            try:
+                # 尝试非阻塞获取任务
+                task = task_queue.get_nowait()
+            except:
+                # 队列为空，没有任务在执行，可以退出了
+                logger.info(f"Worker {worker_id} 所有任务已完成，退出")
+                break
+
+            if task.get("command") == "STOP":
+                logger.info(f"Worker {worker_id} 收到 STOP 指令")
+                break
+
+            task_id = task.get("task_id", f"TASK-{int(time.time())}")
+            novel_input = task.get("novel_input")
+
+            logger.info(f"Worker {worker_id} 收到任务: {task_id}")
+
+            # 创建异步任务（非阻塞）
+            t = asyncio.create_task(
+                novel_agent_task(worker_id, task_id, novel_input)
+            )
+            active_tasks.append(t)
+
+        # 有活跃任务时的处理
+        else:
+            # 尝试获取更多任务
+            try:
+                task = task_queue.get_nowait()
 
                 if task.get("command") == "STOP":
                     logger.info(f"Worker {worker_id} 收到 STOP 指令")
@@ -148,78 +168,42 @@ async def async_worker_loop(
                     novel_agent_task(worker_id, task_id, novel_input)
                 )
                 active_tasks.append(t)
+            except:
+                # 队列为空，继续处理
 
-                logger.info(
-                    f"    [状态] {worker_id} 当前并发任务数: {len(active_tasks)} | "
-                    f"已完成: {completed_count}"
-                )
-                # 不 continue，让循环继续检查已完成的任务
-            else:
-                # 有关联任务时，尝试获取更多任务
-                try:
-                    # 关键：使用 run_in_executor 在线程池中处理队列的阻塞操作
-                    task = await loop.run_in_executor(None, task_queue.get_nowait)
-
-                    if task.get("command") == "STOP":
-                        logger.info(f"Worker {worker_id} 收到 STOP 指令")
-                        break
-
-                    task_id = task.get("task_id", f"TASK-{int(time.time())}")
-                    novel_input = task.get("novel_input")
-
-                    logger.info(f"Worker {worker_id} 收到任务: {task_id}")
-
-                    # 创建异步任务（非阻塞）
-                    t = asyncio.create_task(
-                        novel_agent_task(worker_id, task_id, novel_input)
+                # 限制并发数：如果已达到最大值，等待任务完成
+                if len(active_tasks) >= max_concurrent:
+                    # 等待至少一个任务完成
+                    done, pending = await asyncio.wait(
+                        active_tasks,
+                        return_when=asyncio.FIRST_COMPLETED
                     )
-                    active_tasks.append(t)
-                except:
-                    # 队列为空，继续下一轮
-                    pass
+                    active_tasks = list(pending)
 
-            logger.info(
-                f"    [状态] {worker_id} 当前并发任务数: {len(active_tasks)} | "
-                f"已完成: {completed_count}"
-            )
+                    # 立即处理刚完成的任务
+                    for t in done:
+                        try:
+                            result = t.result()
+                            completed_count += 1
+                            # 将结果放入结果队列
+                            result_queue.put({
+                                "worker_id": worker_id,
+                                **result,
+                            })
+                            logger.info(
+                                f"    [完成] {worker_id} 任务 {result['task_id']} "
+                                f"已返回结果"
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"    [错误] {worker_id} 任务结果获取失败: {e}"
+                            )
 
-            # 限制并发数
-            if len(active_tasks) >= max_concurrent:
-                logger.info(
-                    f"    [限流] {worker_id} 达到最大并发数，等待任务完成..."
-                )
-                # 等待至少一个任务完成
-                done, pending = await asyncio.wait(
-                    active_tasks,
-                    return_when=asyncio.FIRST_COMPLETED
-                )
-                active_tasks = list(pending)
-
-                # 立即处理刚完成的任务
-                for t in done:
-                    try:
-                        result = t.result()
-                        completed_count += 1
-                        # 将结果放入结果队列
-                        result_queue.put({
-                            "worker_id": worker_id,
-                            **result,
-                        })
-                        logger.info(
-                            f"    [完成] {worker_id} 任务 {result['task_id']} "
-                            f"已返回结果"
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"    [错误] {worker_id} 任务结果获取失败: {e}"
-                        )
-
-                # 回到循环开始，处理其他可能的已完成任务
-                continue
-
-        except Exception:
-            # 队列为空或其他错误，继续下一轮
-            await asyncio.sleep(0.5)
+                    # 回到循环开始，处理其他可能的已完成任务
+                    continue
+                else:
+                    # 未达到最大并发数，短暂让出控制权
+                    await asyncio.sleep(0.1)
 
     # 等待所有剩余任务完成
     if active_tasks:
