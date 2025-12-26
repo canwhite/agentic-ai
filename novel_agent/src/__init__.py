@@ -9,5 +9,13 @@ __version__ = "0.1.0"
 __author__ = "Novel Agent Team"
 __email__ = "team@example.com"
 
+# Import main classes for easier access
+from src.agents.novel_agent import NovelAgent, NovelInput, ChapterResult
+from src.runtime.supervisor import Supervisor
 
-__all__ = []
+__all__ = [
+    "NovelAgent",
+    "NovelInput",
+    "ChapterResult",
+    "Supervisor",
+]
