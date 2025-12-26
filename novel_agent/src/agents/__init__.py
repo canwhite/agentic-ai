@@ -1,22 +1,5 @@
-"""
-Agent implementations for Novel Agent.
-"""
+"""Novel Agent Agents"""
 
-from .base_agent import BaseAgent, AgentResult
-from .director import DirectorAgent
-from .plot_designer import PlotDesignAgent
-from .character import CharacterAgent
-from .scene_renderer import SceneRendererAgent
-from .writing_optimizer import WritingOptimizerAgent
-from .consistency_checker import ConsistencyCheckerAgent
+from .novel_agent import NovelAgent, NovelInput, ChapterResult
 
-__all__ = [
-    "BaseAgent",
-    "AgentResult",
-    "DirectorAgent",
-    "PlotDesignAgent",
-    "CharacterAgent",
-    "SceneRendererAgent",
-    "WritingOptimizerAgent",
-    "ConsistencyCheckerAgent",
-]
+__all__ = ["NovelAgent", "NovelInput", "ChapterResult"]
